@@ -1,9 +1,9 @@
 ﻿using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
-using System.Linq;   // needed for .Select(...)
+using System.Linq;
 
-namespace RagBackend.Services
+namespace RagBackend.Infrastructure
 {
     /// <summary>
     /// Gets an embedding (a list of numbers) for a piece of text from OpenRouter.
@@ -29,7 +29,7 @@ namespace RagBackend.Services
             // Read the API key from settings. If it is missing, stop and show an error.
             _apiKey = configuration["OpenRouter:ApiKey"]
                      ?? throw new Exception("OpenRouter API key not configured.");
-             // Create a client that talks to the OpenRouter API.
+            // Create a client that talks to the OpenRouter API.
             _httpClient = new HttpClient
             {
                 BaseAddress = new Uri("https://openrouter.ai/api/v1/")
@@ -67,7 +67,7 @@ namespace RagBackend.Services
                 var error = await response.Content.ReadAsStringAsync();
                 throw new Exception($"OpenRouter embedding error: {response.StatusCode} - {error}");
             }
-             
+
             // Read the response body as text (JSON format).
             var json = await response.Content.ReadAsStringAsync();
 

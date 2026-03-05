@@ -3,7 +3,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 
-namespace RagBackend.Services
+namespace RagBackend.Infrastructure
 {
     /// <summary>
     /// Client to talk to Qdrant (a vector database).
@@ -137,6 +137,7 @@ namespace RagBackend.Services
         /// <returns>List of texts from matching points.</returns>
         /// <exception cref="Exception">Thrown on Qdrant error.</exception>
         public async Task<List<string>> SearchAsync(float[] queryVector, int limit = 3)
+
         {
             // Build a search request and ask Qdrant to include payloads (our text).
             var body = new

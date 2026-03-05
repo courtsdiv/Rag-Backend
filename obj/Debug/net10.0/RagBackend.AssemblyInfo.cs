@@ -11,10 +11,11 @@
 using System;
 using System.Reflection;
 
+[assembly: Microsoft.Extensions.Configuration.UserSecrets.UserSecretsIdAttribute("0a986a7a-369b-42fb-943d-e8265327f899")]
 [assembly: System.Reflection.AssemblyCompanyAttribute("RagBackend")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+9d71c0515a5cf90214c6ebe9a1ac21d7b49eea6c")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+606ce19a5f92681cdc02ed75cfcc961a553411a9")]
 [assembly: System.Reflection.AssemblyProductAttribute("RagBackend")]
 [assembly: System.Reflection.AssemblyTitleAttribute("RagBackend")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

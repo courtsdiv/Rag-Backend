@@ -1,9 +1,14 @@
 // Program.cs - entry point for the web API
 
-// CreateBuilder collects configuration and prepares a place to register services.
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
+using RagBackend.Domain.Models;
+using RagBackend.Infrastructure;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add controller support so our API endpoints (in Controllers) work.
+// Add controller support so our API endpoints (in API folder) work.
 builder.Services.AddControllers();
 
 // Swagger gives a small web page to try your API while developing.
@@ -11,14 +16,37 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 // Register app services that controllers will use.
-// AddSingleton means "make one instance and share it for the whole app".
-builder.Services.AddSingleton<RagBackend.Services.OpenRouterEmbeddingService>();
-builder.Services.AddSingleton<RagBackend.Services.QdrantService>();
-builder.Services.AddSingleton<RagBackend.Services.OpenRouterChatService>();
- 
+// AddSingleton = "create one instance and reuse it for the whole app".
+builder.Services.AddSingleton<OpenRouterEmbeddingService>();
+builder.Services.AddSingleton<QdrantService>();
+builder.Services.AddSingleton<OpenRouterChatService>();
 
-// Build the app. This prepares everything so the app can start.
+// Build the app (assemble all the registered services and middleware).
 var app = builder.Build();
+
+// Global exception handler - this MUST run early in the pipeline
+app.Use(async (context, next) =>
+{
+    try
+    {
+        await next();
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine("[FATAL] Unhandled exception: " + ex);
+
+        context.Response.StatusCode = 500;
+        context.Response.ContentType = "application/json";
+
+        var error = new ApiError
+        {
+            Message = "An unexpected server error occurred.",
+            ErrorCode = "UNHANDLED_EXCEPTION"
+        };
+
+        await context.Response.WriteAsJsonAsync(error);
+    }
+});
 
 // Only show the Swagger test page when we are in Development mode.
 if (app.Environment.IsDevelopment())
@@ -27,14 +55,14 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-// If you want the app to force HTTPS, you can enable the line below.
- app.UseHttpsRedirection(); 
+// Optional: force HTTPS redirects.
+app.UseHttpsRedirection();
 
-// UseAuthorization adds support for [Authorize] attributes on controllers. 
-// If you do not use authorization in your app, this has no effect. 
+// UseAuthorization enables support for [Authorize] attributes.
+// Not using auth yet, but this is fine to keep for later.
 app.UseAuthorization();
 
-// Make controller endpoints available. This connects route attributes to HTTP paths. 
+// Map controller endpoints (connects routes like [HttpPost("answer")] to URLs).
 app.MapControllers();
 
 // Start the web server and keep it running.

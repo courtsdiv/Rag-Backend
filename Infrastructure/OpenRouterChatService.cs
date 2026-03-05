@@ -1,21 +1,25 @@
 ﻿using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 
-namespace RagBackend.Services
+namespace RagBackend.Infrastructure
 {
     /// <summary>
-    /// Simple service that calls OpenRouter's chat API to get a text answer.
+    /// Service for calling OpenRouter's chat API to get a text answer.
     /// </summary>
     /// <remarks>
-    /// This class sends a prompt to a chat model and returns the model's reply as a string.
+    /// Sends a prompt to a chat model and returns the model's reply as plain text.
     /// </remarks>
     public class OpenRouterChatService
     {
-        // HttpClient used to send requests to the OpenRouter API.
-        private readonly HttpClient _httpClient; 
+        private const string BaseUrl = "https://openrouter.ai/api/v1/";
+        private const string ModelName = "meta-llama/llama-3.1-8b-instruct";
 
-        // API key read from configuration. Kept separate so we can add it to headers.
+        // HttpClient used to send requests to the OpenRouter API.
+        private readonly HttpClient _httpClient;
+
+        // API key read from configuration.
         private readonly string _apiKey;
 
         /// <summary>
@@ -31,7 +35,7 @@ namespace RagBackend.Services
             // Create an HttpClient with the OpenRouter API base address.
             _httpClient = new HttpClient
             {
-                BaseAddress = new Uri("https://openrouter.ai/api/v1/")
+                BaseAddress = new Uri(BaseUrl)
             };
 
             // Add the Authorization header so OpenRouter accepts our requests.
@@ -49,10 +53,9 @@ namespace RagBackend.Services
             // Prepare the request body the API expects: model + messages array.
             var body = new
             {
-                model = "meta-llama/llama-3.1-8b-instruct",
+                model = ModelName,
                 messages = new[]
                 {
-                    // We send a single user message containing the prompt.
                     new { role = "user", content = prompt }
                 }
             };
@@ -71,11 +74,10 @@ namespace RagBackend.Services
             var json = await response.Content.ReadAsStringAsync();
 
             // Parse the JSON and pull out the content of the first choice's message.
-            // The structure is: { choices: [ { message: { content: "..." } } ] }
+            // Expected structure: { "choices": [ { "message": { "content": "..." } } ] }
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
-            // Safely extract the nested properties. If anything is missing, return empty string.
             if (!root.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0)
             {
                 return string.Empty;
@@ -84,12 +86,12 @@ namespace RagBackend.Services
             var first = choices[0];
 
             if (!first.TryGetProperty("message", out var message) ||
-                !message.TryGetProperty("content", out var content))
+                !message.TryGetProperty("content", out var contentElement))
             {
                 return string.Empty;
             }
 
-            var answer = content.GetString();
+            var answer = contentElement.GetString();
 
             // Return the answer, or empty string if null.
             return answer ?? string.Empty;

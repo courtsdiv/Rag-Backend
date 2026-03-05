@@ -1,6 +1,6 @@
 [
   {
-    "ContainingType": "RagBackend.Controllers.RagController",
+    "ContainingType": "RagBackend.API.RagController",
     "Method": "GetAnswer",
     "RelativePath": "api/Rag/answer",
     "HttpMethod": "POST",
@@ -16,7 +16,7 @@
     "ReturnTypes": []
   },
   {
-    "ContainingType": "RagBackend.Controllers.RagController",
+    "ContainingType": "RagBackend.API.RagController",
     "Method": "IndexText",
     "RelativePath": "api/Rag/index",
     "HttpMethod": "POST",
@@ -32,7 +32,7 @@
     "ReturnTypes": []
   },
   {
-    "ContainingType": "RagBackend.Controllers.RagController",
+    "ContainingType": "RagBackend.API.RagController",
     "Method": "Search",
     "RelativePath": "api/Rag/search",
     "HttpMethod": "POST",
