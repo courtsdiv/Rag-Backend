@@ -2,6 +2,7 @@
 using RagBackend.Domain.Models;
 using RagBackend.Domain.Errors;
 using RagBackend.Infrastructure;
+using RagBackend.Domain.Utils;
 
 namespace RagBackend.API
 {
@@ -30,15 +31,19 @@ namespace RagBackend.API
 
         private readonly int _topK;
 
+        private readonly ILogger<RagController> _logger;
+
         public RagController(
             OpenRouterEmbeddingService embeddingService,
             QdrantService qdrantService,
             OpenRouterChatService chatService,
-            IConfiguration config)
+            IConfiguration config,
+            ILogger<RagController> logger)
         {
             _embeddingService = embeddingService;
             _qdrantService = qdrantService;
             _chatService = chatService;
+            _logger = logger;
 
             // Default to 3 if the setting is missing.
             _topK = config.GetValue<int>("Retrieval:TopK", 3);
@@ -59,35 +64,54 @@ namespace RagBackend.API
                 });
             }
 
+            _logger.LogInformation("Index request received. Original text length = {Length}", text.Length);
+
+            // ---- CLEAN TEXT FIRST ----
+            var cleaned = TextCleaner.Clean(text);
+            _logger.LogInformation("Cleaned text length = {Length}", cleaned.Length);
+
+            // ---- CHUNK CLEANED TEXT ----
+            var chunks = TextChunker.ChunkText(cleaned);
+            _logger.LogInformation("Created {Count} cleaned chunks.", chunks.Count);
+
+            // Ensure collection exists
             try
             {
+                _logger.LogInformation("Qdrant EnsureCollection started (index)");
                 await _qdrantService.EnsureCollectionAsync(EmbeddingSize);
+                _logger.LogInformation("Qdrant EnsureCollection completed (index)");
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                Console.WriteLine("[ERROR] Qdrant EnsureCollection failed (index): " + ex.Message);
                 return ErrorResults.QdrantUnavailable();
             }
 
-            float[] vector;
-            try
+            // Embed + upsert each chunk
+            foreach (var chunk in chunks)
             {
-                vector = await _embeddingService.GetEmbeddingAsync(text);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("[ERROR] Embedding service failure (index): " + ex.Message);
-                return ErrorResults.LlmUnavailable();
-            }
+                float[] vector;
 
-            try
-            {
-                await _qdrantService.UpsertAsync(vector, text);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("[ERROR] Qdrant upsert failure: " + ex.Message);
-                return ErrorResults.QdrantUnavailable();
+                try
+                {
+                    _logger.LogInformation("Embedding chunk with length = {Length}", chunk.Length);
+                    vector = await _embeddingService.GetEmbeddingAsync(chunk);
+                }
+                catch (Exception)
+                {
+                    _logger.LogWarning("Embedding failed for a chunk. Skipping.");
+                    continue;
+                }
+
+                try
+                {
+                    _logger.LogInformation("Upserting chunk into Qdrant...");
+                    await _qdrantService.UpsertAsync(vector, chunk);
+                }
+                catch (Exception)
+                {
+                    _logger.LogWarning("Upsert failed for a chunk. Skipping.");
+                    continue;
+                }
             }
 
             return Ok(new { message = "Text indexed successfully." });
@@ -108,37 +132,56 @@ namespace RagBackend.API
                 });
             }
 
+            _logger.LogInformation("Search request received. Query: {Query}", query);
+
+            // 1. Ensure Qdrant collection exists
             try
             {
+                _logger.LogInformation("Qdrant EnsureCollection started (search)");
                 await _qdrantService.EnsureCollectionAsync(EmbeddingSize);
+                _logger.LogInformation("Qdrant EnsureCollection completed (search)");
             }
-            catch (Exception ex)
+            catch (QdrantConfigException ex)
             {
-                Console.WriteLine("[ERROR] Qdrant EnsureCollection failed (search): " + ex.Message);
+                _logger.LogWarning("Qdrant configuration error (search): {Message}", ex.Message);
+                return ErrorResults.QdrantUnavailable();
+            }
+            catch (Exception)
+            {
+                _logger.LogWarning("Qdrant EnsureCollection failed (search). Returning QDRANT_UNAVAILABLE.");
                 return ErrorResults.QdrantUnavailable();
             }
 
             float[] queryVector;
+
+            // 2. Get embedding for the query
             try
             {
+                _logger.LogInformation("Embedding request started (search)");
                 queryVector = await _embeddingService.GetEmbeddingAsync(query);
+                _logger.LogInformation("Embedding request completed (search)");
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                Console.WriteLine("[ERROR] Embedding service failure (search): " + ex.Message);
+                _logger.LogWarning("Embedding service failure (search). Returning LLM_UNAVAILABLE.");
                 return ErrorResults.LlmUnavailable();
             }
 
+            // 3. Search Qdrant
             List<string> results;
             try
             {
+                _logger.LogInformation("Qdrant Search started (search)");
                 results = await _qdrantService.SearchAsync(queryVector, limit: _topK);
+                _logger.LogInformation("Qdrant Search completed (search) with {Count} results", results.Count);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                Console.WriteLine("[ERROR] Qdrant search failure: " + ex.Message);
+                _logger.LogWarning("Qdrant search failure (search). Returning QDRANT_UNAVAILABLE.");
                 return ErrorResults.QdrantUnavailable();
             }
+
+            _logger.LogInformation("Search request completed successfully.");
 
             return Ok(results);
         }
@@ -158,43 +201,53 @@ namespace RagBackend.API
                 });
             }
 
+            _logger.LogInformation("Incoming question: {Question}", question);
+            _logger.LogInformation("Using TopK = {TopK}", _topK);
+
             // 1. Ensure Qdrant collection exists
             try
             {
+                _logger.LogInformation("Qdrant EnsureCollection started (answer)");
                 await _qdrantService.EnsureCollectionAsync(EmbeddingSize);
+                _logger.LogInformation("Qdrant EnsureCollection completed (answer)");
             }
-            catch (Exception ex)
+            catch (QdrantConfigException ex)
             {
-                Console.WriteLine("[ERROR] Qdrant EnsureCollection failed (answer): " + ex.Message);
+                _logger.LogWarning("Qdrant configuration error (answer): {Message}", ex.Message);
+                return ErrorResults.QdrantUnavailable();
+            }
+            catch (Exception)
+            {
+                _logger.LogWarning("Qdrant EnsureCollection failed (answer). Returning QDRANT_UNAVAILABLE.");
                 return ErrorResults.QdrantUnavailable();
             }
 
             float[] queryEmbedding;
 
-            // 2. Get embedding for the question (uses OpenRouter)
+            // 2. Get embedding for the question
             try
             {
+                _logger.LogInformation("Embedding request started (answer)");
                 queryEmbedding = await _embeddingService.GetEmbeddingAsync(question);
+                _logger.LogInformation("Embedding request completed (answer)");
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                Console.WriteLine("[ERROR] Embedding service failure (answer): " + ex.Message);
+                _logger.LogWarning("Embedding service failure (answer). Returning LLM_UNAVAILABLE.");
                 return ErrorResults.LlmUnavailable();
             }
 
-            Console.WriteLine($"[RAG] Question: \"{question}\"");
-            Console.WriteLine($"[RAG] Using TopK = {_topK}");
-
-            List<string> topChunks;
-
             // 3. Search Qdrant
+            List<string> topChunks;
             try
             {
+                _logger.LogInformation("Qdrant Search started (answer)");
                 topChunks = await _qdrantService.SearchAsync(queryEmbedding, limit: _topK);
+                _logger.LogInformation("Qdrant Search completed (answer) with {Count} chunks", topChunks.Count);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                Console.WriteLine("[ERROR] Qdrant search failure (answer): " + ex.Message);
+                _logger.LogWarning("Qdrant search failure (answer). Returning QDRANT_UNAVAILABLE.");
                 return ErrorResults.QdrantUnavailable();
             }
 
@@ -216,22 +269,24 @@ namespace RagBackend.API
             - Keep your answer short and factual.
             ".Trim();
 
-            Console.WriteLine("----- FINAL PROMPT -----");
-            Console.WriteLine(prompt);
-            Console.WriteLine("------------------------");
+            _logger.LogDebug("Final prompt sent to LLM: {Prompt}", prompt);
 
             string answer;
 
             // 4. Ask LLM to answer using the prompt
             try
             {
+                _logger.LogInformation("LLM request started (answer)");
                 answer = await _chatService.GetAnswerAsync(prompt);
+                _logger.LogInformation("LLM request completed (answer)");
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                Console.WriteLine("[ERROR] LLM answer failure: " + ex.Message);
+                _logger.LogWarning("LLM answer failure (answer). Returning LLM_UNAVAILABLE.");
                 return ErrorResults.LlmUnavailable();
             }
+
+            _logger.LogInformation("Answer request completed successfully.");
 
             // 5. Return success response
             return Ok(new

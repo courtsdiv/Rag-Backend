@@ -11,7 +11,9 @@ namespace RagBackend.Domain.Errors
     {
         public static IActionResult QdrantUnavailable() =>
             new ObjectResult(new ApiError
+
             {
+
                 Message = "The vector database is currently unavailable.",
                 ErrorCode = "QDRANT_UNAVAILABLE"
             })
@@ -38,5 +40,10 @@ namespace RagBackend.Domain.Errors
             {
                 StatusCode = 500
             };
+    }
+
+    public class QdrantConfigException : Exception
+    {
+        public QdrantConfigException(string message) : base(message) { }
     }
 }

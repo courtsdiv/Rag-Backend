@@ -14,33 +14,31 @@ namespace RagBackend.Infrastructure
     /// </remarks>
     public class OpenRouterEmbeddingService
     {
-        // This HttpClient sends web requests to the OpenRouter service.
         private readonly HttpClient _httpClient;
-
-        // The API key we read from app settings. It is used to authenticate requests.
         private readonly string _apiKey;
+        private readonly ILogger<OpenRouterEmbeddingService> _logger;
 
         /// <summary>
         /// Set up the service and prepare the web client.
         /// </summary>
         /// <param name="configuration">App settings (must contain OpenRouter:ApiKey).</param>
-        public OpenRouterEmbeddingService(IConfiguration configuration)
+        /// <param name="logger">Logger for diagnostics.</param>
+        public OpenRouterEmbeddingService(IConfiguration configuration, ILogger<OpenRouterEmbeddingService> logger)
         {
-            // Read the API key from settings. If it is missing, stop and show an error.
+            _logger = logger;
+
             _apiKey = configuration["OpenRouter:ApiKey"]
-                     ?? throw new Exception("OpenRouter API key not configured.");
-            // Create a client that talks to the OpenRouter API.
+                      ?? throw new Exception("OpenRouter API key not configured.");
+
             _httpClient = new HttpClient
             {
                 BaseAddress = new Uri("https://openrouter.ai/api/v1/")
             };
 
-            // Add the API key to the request headers so OpenRouter knows we are allowed to use the API.
             _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
 
-            // These headers are optional. They can help some services, but are not required.
-            // _httpClient.DefaultRequestHeaders.Add("HTTP-Referer", "http://localhost");
-            // _httpClient.DefaultRequestHeaders.Add("X-Title", "RagBackend");
+            _logger.LogInformation("OpenRouterEmbeddingService initialised with base URL {BaseUrl}",
+                _httpClient.BaseAddress);
         }
 
         /// <summary>
@@ -48,44 +46,69 @@ namespace RagBackend.Infrastructure
         /// </summary>
         /// <param name="text">Text to convert to numbers.</param>
         /// <returns>Array of float numbers (the embedding).</returns>
-        /// <exception cref="Exception">If the API returns an error response.</exception>
+        /// <exception cref="Exception">If the API returns an error response or invalid JSON.</exception>
         public async Task<float[]> GetEmbeddingAsync(string text)
         {
-            // Prepare the request body. We tell the API which model to use and give the text.
+            _logger.LogInformation(
+                "Embedding request started. Text length = {Length} characters",
+                text?.Length ?? 0);
+
             var request = new
             {
                 model = "text-embedding-3-small",
                 input = text
             };
 
-            // Send the request to the 'embeddings' endpoint. This is a POST request.
-            var response = await _httpClient.PostAsJsonAsync("embeddings", request);
+            HttpResponseMessage response;
 
-            // If the API returned an error status, read the error message and throw.
+            try
+            {
+                response = await _httpClient.PostAsJsonAsync("embeddings", request);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "HTTP error calling OpenRouter embeddings endpoint.");
+                throw;
+            }
+
             if (!response.IsSuccessStatusCode)
             {
                 var error = await response.Content.ReadAsStringAsync();
+                _logger.LogError(
+                    "OpenRouter embedding error. StatusCode={StatusCode}, Body={Body}",
+                    response.StatusCode,
+                    error);
+
                 throw new Exception($"OpenRouter embedding error: {response.StatusCode} - {error}");
             }
 
-            // Read the response body as text (JSON format).
             var json = await response.Content.ReadAsStringAsync();
 
-            // Parse the JSON and find the embedding numbers.
-            // The API returns something like: { data: [ { embedding: [0.1, 0.2, ...] } ] }
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
 
-            // Convert the JSON array values into float numbers in C#.
-            var vector = root
-                .GetProperty("data")[0]
-                .GetProperty("embedding")
-                .EnumerateArray()
-                .Select(x => x.GetSingle())
-                .ToArray();
+                var vector = root
+                    .GetProperty("data")[0]
+                    .GetProperty("embedding")
+                    .EnumerateArray()
+                    .Select(x => x.GetSingle())
+                    .ToArray();
 
-            // Return the list of numbers. This is the embedding you can store or compare.
-            return vector;
+                _logger.LogInformation(
+                    "Embedding request completed successfully. Vector length = {Length}",
+                    vector.Length);
+
+                return vector;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Failed to parse embedding JSON response from OpenRouter. Raw body: {Body}",
+                    json);
+                throw;
+            }
         }
     }
 }
