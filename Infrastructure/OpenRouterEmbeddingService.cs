@@ -2,6 +2,8 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Linq;
+using Microsoft.AspNetCore.Identity;
+using RagBackend.Infrastructure.Interfaces;
 
 namespace RagBackend.Infrastructure
 {
@@ -12,10 +14,10 @@ namespace RagBackend.Infrastructure
     /// An embedding is a list of numbers that tries to capture the meaning of text.
     /// We send the text to OpenRouter and return the numbers it gives us.
     /// </remarks>
-    public class OpenRouterEmbeddingService
+    public class OpenRouterEmbeddingService : IOpenRouterEmbeddingService
     {
         private readonly HttpClient _httpClient;
-        private readonly string _apiKey;
+        private readonly string? _apiKey;
         private readonly ILogger<OpenRouterEmbeddingService> _logger;
 
         /// <summary>
@@ -27,15 +29,19 @@ namespace RagBackend.Infrastructure
         {
             _logger = logger;
 
-            _apiKey = configuration["OpenRouter:ApiKey"]
-                      ?? throw new Exception("OpenRouter API key not configured.");
+            _apiKey = configuration["OpenRouter:ApiKey"];
+                     
 
             _httpClient = new HttpClient
             {
                 BaseAddress = new Uri("https://openrouter.ai/api/v1/")
             };
 
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
+            if (!string.IsNullOrWhiteSpace(_apiKey))
+            {
+
+                _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
+            }
 
             _logger.LogInformation("OpenRouterEmbeddingService initialised with base URL {BaseUrl}",
                 _httpClient.BaseAddress);

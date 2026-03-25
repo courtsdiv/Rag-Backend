@@ -3,10 +3,11 @@ using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using RagBackend.Infrastructure.Interfaces;
 
 namespace RagBackend.Infrastructure
 {
-    public class QdrantService
+    public class QdrantService : IQdrantService
     {
         private readonly HttpClient _httpClient;
         private readonly string? _url;
