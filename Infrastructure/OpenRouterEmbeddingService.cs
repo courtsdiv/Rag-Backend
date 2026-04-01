@@ -2,7 +2,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Linq;
-using Microsoft.AspNetCore.Identity;
 using RagBackend.Infrastructure.Interfaces;
 
 namespace RagBackend.Infrastructure
