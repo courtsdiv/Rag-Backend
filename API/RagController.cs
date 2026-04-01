@@ -5,8 +5,6 @@ using RagBackend.Infrastructure;
 using RagBackend.Infrastructure.Interfaces;
 using RagBackend.Domain.Utils;
 
-// Small update for PR workflow testing - ignore this change
-
 namespace RagBackend.API
 {
     /// <summary>
