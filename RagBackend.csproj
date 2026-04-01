@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>rag-backend-user-secrets</UserSecretsId>
+    <UserSecretsId>rag-backend-user-secrets</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
