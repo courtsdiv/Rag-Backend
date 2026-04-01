@@ -14,7 +14,7 @@ namespace RagBackend.Infrastructure
         private readonly string? _apiKey;
         private readonly ILogger<QdrantService> _logger;
 
-        private const string CollectionName = "rag_chunks_v11";
+        private const string CollectionName = "rag_chunks_v12";
 
         public QdrantService(IConfiguration configuration, ILogger<QdrantService> logger)
         {

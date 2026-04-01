@@ -55,7 +55,7 @@ namespace RagBackend.Infrastructure
 
             var requestBody = new
             {
-                model = "meta-llama/Meta-Llama-3-8B-Instruct",
+                model = "meta-llama/Llama-3.1-8B-instruct",
                 messages = new[]
                 {
                     new { role = "user", content = prompt }
@@ -78,7 +78,7 @@ namespace RagBackend.Infrastructure
             {
                 var body = await response.Content.ReadAsStringAsync();
                 _logger.LogError("OpenRouter chat error: {StatusCode} - {Body}", response.StatusCode, body);
-                throw new Exception($"OpenRouter chat error: {response.StatusCode}");
+                throw new Exception($"OpenRouter chat error: {response.StatusCode} - {body}");
             }
 
             var json = await response.Content.ReadAsStringAsync();

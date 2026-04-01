@@ -2,18 +2,16 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Linq;
-using Microsoft.AspNetCore.Identity;
 using RagBackend.Infrastructure.Interfaces;
 
 namespace RagBackend.Infrastructure
 {
+
     /// <summary>
-    /// Gets an embedding (a list of numbers) for a piece of text from OpenRouter.
+    /// Creates the embedding service. If OpenRouter:ApiKey is not configured,
+    /// requests will proceed without an Authorization header.
     /// </summary>
-    /// <remarks>
-    /// An embedding is a list of numbers that tries to capture the meaning of text.
-    /// We send the text to OpenRouter and return the numbers it gives us.
-    /// </remarks>
+
     public class OpenRouterEmbeddingService : IOpenRouterEmbeddingService
     {
         private readonly HttpClient _httpClient;

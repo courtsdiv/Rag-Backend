@@ -1,4 +1,4 @@
 <Solution>
-  <Project Path="../RagBackend.Tests/RagBackend.Tests.csproj" Id="3d81e9bc-190e-424f-91c0-7b6f2c0ef492" />
+  <Project Path="../RagBackend.Tests/RagBackend.Tests.csproj" />
   <Project Path="RagBackend.csproj" />
 </Solution>
