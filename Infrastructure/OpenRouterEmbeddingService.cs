@@ -1,65 +1,61 @@
-﻿using System.Net.Http;
+﻿using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
-using System.Linq;
-using RagBackend.Infrastructure.Interfaces;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using RagBackend.Application.Interfaces;
 
 namespace RagBackend.Infrastructure
 {
-
-    /// <summary>
-    /// Creates the embedding service. If OpenRouter:ApiKey is not configured,
-    /// requests will proceed without an Authorization header.
-    /// </summary>
-
-    public class OpenRouterEmbeddingService : IOpenRouterEmbeddingService
+    public sealed class OpenRouterEmbeddingService : IEmbeddingService
     {
+        // Constants (endpoint + default model)
+        private const string EmbeddingsPath = "embeddings";
+        private const string DefaultModel = "text-embedding-3-small";
+
+        // Dependencies (constructor-injected)
         private readonly HttpClient _httpClient;
-        private readonly string? _apiKey;
         private readonly ILogger<OpenRouterEmbeddingService> _logger;
 
-        /// <summary>
-        /// Set up the service and prepare the web client.
-        /// </summary>
-        /// <param name="configuration">App settings (must contain OpenRouter:ApiKey).</param>
-        /// <param name="logger">Logger for diagnostics.</param>
-        public OpenRouterEmbeddingService(IConfiguration configuration, ILogger<OpenRouterEmbeddingService> logger)
+        // Configuration values (read once in constructor)
+        private readonly string _embeddingModel;
+
+        // Constructor (sets dependencies + reads config)
+        public OpenRouterEmbeddingService(
+            HttpClient httpClient,
+            IConfiguration configuration,
+            ILogger<OpenRouterEmbeddingService> logger)
         {
+            _httpClient = httpClient;
             _logger = logger;
 
-            _apiKey = configuration["OpenRouter:ApiKey"];
-                     
+            // Read API key from config (used for Authorization header)
+            var apiKey = configuration["OpenRouter:ApiKey"];
 
-            _httpClient = new HttpClient
+            if (!string.IsNullOrWhiteSpace(apiKey))
             {
-                BaseAddress = new Uri("https://openrouter.ai/api/v1/")
-            };
-
-            if (!string.IsNullOrWhiteSpace(_apiKey))
-            {
-
-                _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
+                _httpClient.DefaultRequestHeaders.Authorization =
+                    new AuthenticationHeaderValue("Bearer", apiKey);
             }
 
-            _logger.LogInformation("OpenRouterEmbeddingService initialised with base URL {BaseUrl}",
-                _httpClient.BaseAddress);
+            // Read embedding model from config (fallback to default)
+            _embeddingModel = configuration["OpenRouter:EmbeddingModel"] ?? DefaultModel;
+
+            // Optional: default Accept header
+            _httpClient.DefaultRequestHeaders.Accept.Add(
+                new MediaTypeWithQualityHeaderValue("application/json"));
         }
 
-        /// <summary>
-        /// Ask OpenRouter for an embedding for the given text.
-        /// </summary>
-        /// <param name="text">Text to convert to numbers.</param>
-        /// <returns>Array of float numbers (the embedding).</returns>
-        /// <exception cref="Exception">If the API returns an error response or invalid JSON.</exception>
+        // Public method (generates an embedding vector for text)
         public async Task<float[]> GetEmbeddingAsync(string text)
         {
-            _logger.LogInformation(
-                "Embedding request started. Text length = {Length} characters",
-                text?.Length ?? 0);
+            if (string.IsNullOrWhiteSpace(text))
+                return Array.Empty<float>();
 
-            var request = new
+            // Request payload sent to OpenRouter
+            var requestBody = new
             {
-                model = "text-embedding-3-small",
+                model = _embeddingModel,
                 input = text
             };
 
@@ -67,51 +63,38 @@ namespace RagBackend.Infrastructure
 
             try
             {
-                response = await _httpClient.PostAsJsonAsync("embeddings", request);
+                response = await _httpClient.PostAsJsonAsync(EmbeddingsPath, requestBody);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "HTTP error calling OpenRouter embeddings endpoint.");
+                _logger.LogError(ex, "Failed to call OpenRouter embeddings endpoint.");
                 throw;
             }
+
+            var body = await response.Content.ReadAsStringAsync();
 
             if (!response.IsSuccessStatusCode)
             {
-                var error = await response.Content.ReadAsStringAsync();
-                _logger.LogError(
-                    "OpenRouter embedding error. StatusCode={StatusCode}, Body={Body}",
-                    response.StatusCode,
-                    error);
-
-                throw new Exception($"OpenRouter embedding error: {response.StatusCode} - {error}");
+                _logger.LogError("OpenRouter embedding error: {StatusCode} - {Body}", response.StatusCode, body);
+                throw new HttpRequestException(
+                    $"OpenRouter embedding request failed with status code {(int)response.StatusCode}.");
             }
-
-            var json = await response.Content.ReadAsStringAsync();
 
             try
             {
-                using var doc = JsonDocument.Parse(json);
-                var root = doc.RootElement;
+                using var doc = JsonDocument.Parse(body);
 
-                var vector = root
+                var embeddingArray = doc.RootElement
                     .GetProperty("data")[0]
                     .GetProperty("embedding")
-                    .EnumerateArray()
-                    .Select(x => x.GetSingle())
-                    .ToArray();
+                    .EnumerateArray();
 
-                _logger.LogInformation(
-                    "Embedding request completed successfully. Vector length = {Length}",
-                    vector.Length);
-
-                return vector;
+                return embeddingArray.Select(x => x.GetSingle()).ToArray();
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex,
-                    "Failed to parse embedding JSON response from OpenRouter. Raw body: {Body}",
-                    json);
-                throw;
+                _logger.LogError(ex, "Failed to parse OpenRouter embedding response.");
+                throw new JsonException("Invalid JSON from OpenRouter embeddings endpoint.", ex);
             }
         }
     }

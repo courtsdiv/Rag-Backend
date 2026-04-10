@@ -1,61 +1,57 @@
-﻿using System.Net.Http;
+﻿using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using RagBackend.Infrastructure.Interfaces;
+using RagBackend.Application.Interfaces;
 
 namespace RagBackend.Infrastructure
 {
-    public class OpenRouterChatService : IOpenRouterChatService
+    public sealed class OpenRouterChatService : IChatCompletionService
     {
+        // Constants (endpoint + default model)
+        private const string ChatCompletionsPath = "chat/completions";
+        private const string DefaultModel = "meta-llama/llama-3.1-8b-instruct";
+
+        // Dependencies (constructor-injected)
         private readonly HttpClient _httpClient;
-        private readonly string? _apiKey;
         private readonly ILogger<OpenRouterChatService> _logger;
 
-        /// <summary>
-        /// Create the chat service and set up the HTTP client.
-        /// </summary>
-        public OpenRouterChatService(IConfiguration config, ILogger<OpenRouterChatService> logger)
+        // Configuration values (read once in constructor)
+        private readonly string _chatModel;
+
+        // Constructor (sets dependencies + reads config)
+        public OpenRouterChatService(
+            HttpClient httpClient,
+            IConfiguration configuration,
+            ILogger<OpenRouterChatService> logger)
         {
+            _httpClient = httpClient;
             _logger = logger;
-            _apiKey = config["OpenRouter:ApiKey"];   
 
+            // Read API key from config (used for Authorization header)
+            var apiKey = configuration["OpenRouter:ApiKey"];
 
-            _httpClient = new HttpClient
+            if (!string.IsNullOrWhiteSpace(apiKey))
             {
-                BaseAddress = new Uri("https://openrouter.ai/api/v1/")
-            };
-
-            if (!string.IsNullOrWhiteSpace(_apiKey))
-            {
-                _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
+                _httpClient.DefaultRequestHeaders.Authorization =
+                    new AuthenticationHeaderValue("Bearer", apiKey);
             }
 
-            _logger.LogInformation("OpenRouterChatService initialised with base URL {BaseUrl}",
-                _httpClient.BaseAddress);
+            // Read chat model from config (fallback to default)
+            _chatModel = configuration["OpenRouter:ChatModel"] ?? DefaultModel;
         }
 
-        /// <summary>
-        /// Ensure the API key is present before calling OpenRouter.
-        /// </summary>
-        private void EnsureConfig()
-        {
-            if (string.IsNullOrWhiteSpace(_apiKey))
-            {
-                _logger.LogError("OpenRouter API key is missing or empty.");
-                throw new Exception("OpenRouter API key is missing or empty.");
-            }
-        }
-
-        // This implements the method required by IOpenRouterChatService
+        // Public method (sends a prompt to the LLM and returns the answer)
         public async Task<string> GetAnswerAsync(string prompt)
         {
-            EnsureConfig(); // validate here, not in constructor
+            if (string.IsNullOrWhiteSpace(prompt))
+                return string.Empty;
 
+            // Request payload sent to OpenRouter
             var requestBody = new
             {
-                model = "meta-llama/Llama-3.1-8B-instruct",
+                model = _chatModel,
                 messages = new[]
                 {
                     new { role = "user", content = prompt }
@@ -66,41 +62,45 @@ namespace RagBackend.Infrastructure
 
             try
             {
-                response = await _httpClient.PostAsJsonAsync("chat/completions", requestBody);
+                response = await _httpClient.PostAsJsonAsync(ChatCompletionsPath, requestBody);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "HTTP error calling OpenRouter chat endpoint.");
+                _logger.LogError(ex, "Failed to call OpenRouter chat endpoint.");
                 throw;
             }
 
+            var body = await response.Content.ReadAsStringAsync();
+
             if (!response.IsSuccessStatusCode)
             {
-                var body = await response.Content.ReadAsStringAsync();
                 _logger.LogError("OpenRouter chat error: {StatusCode} - {Body}", response.StatusCode, body);
-                throw new Exception($"OpenRouter chat error: {response.StatusCode} - {body}");
-            }
 
-            var json = await response.Content.ReadAsStringAsync();
+                throw new HttpRequestException(
+                    $"OpenRouter chat request failed with status code {(int)response.StatusCode}.");
+            }
 
             try
             {
-                using var doc = JsonDocument.Parse(json);
-                var root = doc.RootElement;
+                using var doc = JsonDocument.Parse(body);
 
-                var content = root
-                    .GetProperty("choices")[0]
-                    .GetProperty("message")
-                    .GetProperty("content")
-                    .GetString();
+                // Expected shape: { choices: [ { message: { content: "..." } } ] }
+                if (!doc.RootElement.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0)
+                    return string.Empty;
 
-                return content ?? "";
+                var firstChoice = choices[0];
+
+                if (!firstChoice.TryGetProperty("message", out var message))
+                    return string.Empty;
+
+                if (!message.TryGetProperty("content", out var contentElement))
+                    return string.Empty;
+
+                return contentElement.GetString() ?? string.Empty;
             }
-            catch (Exception ex)
+            catch (JsonException ex)
             {
-                _logger.LogError(ex,
-                    "Failed to parse chat JSON response from OpenRouter. Raw body: {Body}",
-                    json);
+                _logger.LogError(ex, "Failed to parse OpenRouter chat response.");
                 throw;
             }
         }

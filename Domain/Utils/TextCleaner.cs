@@ -2,31 +2,29 @@
 
 namespace RagBackend.Domain.Utils
 {
+    // Utility for cleaning and normalising raw text before chunking and retrieval
     public static class TextCleaner
     {
+        // Normalises input text by fixing line breaks, spacing, and formatting issues
         public static string Clean(string text)
         {
+            // Guard: return empty string if input text is empty
             if (string.IsNullOrWhiteSpace(text))
                 return string.Empty;
 
             // Normalise line endings
             text = text.Replace("\r\n", "\n");
 
-            // 1) Fix headings: line ends with a letter, next line starts with Capital
-            // "Why Supply Chains Matter\nCompetitive Advantage:" 
-            // -> "Why Supply Chains Matter. Competitive Advantage:"
-            // "Key Aspects of a Supply Chain\nFlows:" 
-            // -> "Key Aspects of a Supply Chain. Flows:"
+            // Join headings or sentences split across lines
             text = Regex.Replace(text, "([a-zA-Z])\\s*\\n\\s*([A-Z])", "$1. $2");
 
-            // 2) Fix broken words split mid-word (lowercase after newline):
-            // "custo\nmer" -> "customer"
+            // Join words split mid-word across line breaks
             text = Regex.Replace(text, "([a-zA-Z])\\s*\\n\\s*([a-z])", "$1$2");
 
-            // 3) Any remaining newlines -> space
+            // Replace remaining line breaks with spaces
             text = Regex.Replace(text, "\\n+", " ");
 
-            // 4) Collapse multiple spaces
+            // Collapse multiple spaces into a single space
             text = Regex.Replace(text, "\\s{2,}", " ");
 
             return text.Trim();

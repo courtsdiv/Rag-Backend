@@ -1,69 +1,63 @@
-﻿using RagBackend.Domain.Errors;
-using System.Net.Http;
-using System.Net.Http.Json;
+﻿using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using RagBackend.Infrastructure.Interfaces;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using RagBackend.Application.Interfaces;
+using RagBackend.Domain.Errors;
 
 namespace RagBackend.Infrastructure
 {
-    public class QdrantService : IQdrantService
+    public sealed class QdrantService : IQdrantService
     {
+        // Constants (collection name + header names)
+        private const string CollectionName = "rag_chunks_v12";
+        private const string ApiKeyHeaderName = "api-key";
+
+        // Dependencies
         private readonly HttpClient _httpClient;
-        private readonly string? _url;
-        private readonly string? _apiKey;
         private readonly ILogger<QdrantService> _logger;
 
-        private const string CollectionName = "rag_chunks_v12";
+        // Configuration values (read once in constructor)
+        private readonly string _url;
+        private readonly string _apiKey;
 
+        // Constructor (reads config, initialises HttpClient)
         public QdrantService(IConfiguration configuration, ILogger<QdrantService> logger)
         {
-            // Store config values, but DO NOT validate here
-            _url = configuration["Qdrant:Url"];
-            _apiKey = configuration["Qdrant:ApiKey"]; 
-
             _logger = logger;
+
+            // Read config values (validated lazily)
+            _url = configuration["Qdrant:Url"] ?? string.Empty;
+            _apiKey = configuration["Qdrant:ApiKey"] ?? string.Empty;
+
             _httpClient = new HttpClient();
         }
 
-        // Centralised safe config validation
+        // Internal helper (validates config and applies it to HttpClient)
         private void EnsureConfig()
         {
             if (string.IsNullOrWhiteSpace(_url))
-            {
-                _logger.LogError("Qdrant URL missing or empty.");
                 throw new QdrantConfigException("Qdrant URL is missing or empty.");
-            }
 
             if (!Uri.IsWellFormedUriString(_url, UriKind.Absolute))
-            {
-                _logger.LogError("Qdrant URL invalid: {Url}", _url);
                 throw new QdrantConfigException($"Invalid Qdrant URL: '{_url}'");
-            }
 
             if (string.IsNullOrWhiteSpace(_apiKey))
-            {
-                _logger.LogError("Qdrant API key missing or empty.");
                 throw new QdrantConfigException("Qdrant API key is missing or empty.");
-            }
-            // Configure HttpClient only when config is valid
-            if (_httpClient.BaseAddress == null)
-            {
-                _logger.LogInformation("Configuring HttpClient BaseAddress for Qdrant.");
-                _httpClient.BaseAddress = new Uri(_url);
-            }
 
-            if (!_httpClient.DefaultRequestHeaders.Contains("api-key"))
-            {
-                _logger.LogInformation("Adding Qdrant API key header.");
-                _httpClient.DefaultRequestHeaders.Add("api-key", _apiKey);
-            }
+            if (_httpClient.BaseAddress == null)
+                _httpClient.BaseAddress = new Uri(_url);
+
+            if (!_httpClient.DefaultRequestHeaders.Contains(ApiKeyHeaderName))
+                _httpClient.DefaultRequestHeaders.Add(ApiKeyHeaderName, _apiKey);
         }
 
+        // Public method (ensures the vector collection exists)
         public async Task EnsureCollectionAsync(int vectorSize)
         {
-            _logger.LogInformation("Qdrant EnsureCollectionAsync started.");
-            EnsureConfig(); // validate here!
+            EnsureConfig();
 
             var requestBody = new
             {
@@ -74,109 +68,128 @@ namespace RagBackend.Infrastructure
                 }
             };
 
-            var response = await _httpClient.PutAsJsonAsync(
-                $"/collections/{CollectionName}",
-                requestBody
-            );
+            var response =
+                await _httpClient.PutAsJsonAsync($"/collections/{CollectionName}", requestBody);
 
+            // Qdrant returns 409 if the collection already exists (treat as success)
             if (!response.IsSuccessStatusCode && (int)response.StatusCode != 409)
             {
                 var error = await response.Content.ReadAsStringAsync();
-                _logger.LogError("Qdrant EnsureCollection error: {StatusCode} - {Error}", response.StatusCode, error);
-                throw new Exception($"Qdrant EnsureCollection error: {response.StatusCode} - {error}");
+                _logger.LogError(
+                    "Qdrant EnsureCollection error: {StatusCode} - {Error}",
+                    response.StatusCode,
+                    error);
+
+                throw new HttpRequestException(
+                    $"Qdrant EnsureCollection failed with status {(int)response.StatusCode}.");
             }
-            _logger.LogInformation("Qdrant EnsureCollectionAsync completed successfully.");
         }
 
-        public async Task UpsertAsync(float[] vector, string text)
+        // Public method (stores a chunk and its embedding)
+        public async Task UpsertAsync(float[] embedding, string chunk)
         {
-            EnsureConfig(); // validate here!
+            EnsureConfig();
 
-            var hashBytes = System.Security.Cryptography.SHA256.HashData(
-                Encoding.UTF8.GetBytes(text)
-            );
-
-            var guidBytes = new byte[16];
-            Array.Copy(hashBytes, guidBytes, 16);
-
-            var pointId = new Guid(guidBytes);
+            var pointId = CreateDeterministicId(chunk);
 
             var point = new
             {
                 id = pointId,
-                vector = vector,
-                payload = new { text }
+                vector = embedding,
+                payload = new { text = chunk }
             };
 
             var body = new { points = new[] { point } };
 
-            var response = await _httpClient.PutAsJsonAsync(
-                $"/collections/{CollectionName}/points",
-                body
-            );
+            var response =
+                await _httpClient.PutAsJsonAsync($"/collections/{CollectionName}/points", body);
 
             if (!response.IsSuccessStatusCode)
             {
                 var error = await response.Content.ReadAsStringAsync();
-                _logger.LogError("Qdrant Upsert error: {StatusCode} - {Error}", response.StatusCode, error);
-                throw new Exception($"Qdrant Upsert error: {response.StatusCode} - {error}");
+                _logger.LogError(
+                    "Qdrant Upsert error: {StatusCode} - {Error}",
+                    response.StatusCode,
+                    error);
+
+                throw new HttpRequestException(
+                    $"Qdrant Upsert failed with status {(int)response.StatusCode}.");
             }
-            _logger.LogInformation("Qdrant UpsertAsync completed successfully.");
         }
 
-        public async Task<List<string>> SearchAsync(float[] queryVector, int limit = 3)
+        // Public method (searches for similar chunks using an embedding)
+        public async Task<List<string>> SearchAsync(float[] embedding, int limit)
         {
-            _logger.LogInformation("Qdrant SearchAsync started with limit {Limit}.", limit);
-            EnsureConfig(); // validate here!
+            EnsureConfig();
 
             var body = new
             {
-                vector = queryVector,
-                limit = limit,
+                vector = embedding,
+                limit,
                 with_payload = true
             };
 
-            var response = await _httpClient.PostAsJsonAsync(
-                $"/collections/{CollectionName}/points/search",
-                body
-            );
-            _logger.LogInformation("Qdrant SearchAsync received response with status code {StatusCode}.", response.StatusCode);
+            var response =
+                await _httpClient.PostAsJsonAsync(
+                    $"/collections/{CollectionName}/points/search",
+                    body
+                );
+
+            var json = await response.Content.ReadAsStringAsync();
 
             if (!response.IsSuccessStatusCode)
             {
-                var error = await response.Content.ReadAsStringAsync();
-                _logger.LogError("Qdrant Search error: {StatusCode} - {Error}", response.StatusCode, error);
-                throw new Exception($"Qdrant Search error: {response.StatusCode} - {error}");
-            }
-            _logger.LogInformation("Qdrant SearchAsync response successful, processing results.");
+                _logger.LogError(
+                    "Qdrant Search error: {StatusCode} - {Error}",
+                    response.StatusCode,
+                    json);
 
-            var json = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            if (!root.TryGetProperty("result", out var resultElement) ||
-                resultElement.ValueKind != JsonValueKind.Array)
-            {
-                _logger.LogWarning("Qdrant Search returned no results");
-                return new List<string>();
+                throw new HttpRequestException(
+                    $"Qdrant Search failed with status {(int)response.StatusCode}.");
             }
 
-            var texts = new List<string>();
-
-            foreach (var item in resultElement.EnumerateArray())
+            try
             {
-                if (item.TryGetProperty("payload", out var payloadElement) &&
-                    payloadElement.TryGetProperty("text", out var textElement))
+                using var doc = JsonDocument.Parse(json);
+
+                if (!doc.RootElement.TryGetProperty("result", out var resultElement) ||
+                    resultElement.ValueKind != JsonValueKind.Array)
                 {
-                    var value = textElement.GetString();
-                    if (!string.IsNullOrEmpty(value))
-                        texts.Add(value);
+                    _logger.LogWarning("Qdrant Search returned no results.");
+                    return new List<string>();
                 }
+
+                var texts = new List<string>();
+
+                foreach (var item in resultElement.EnumerateArray())
+                {
+                    if (item.TryGetProperty("payload", out var payloadElement) &&
+                        payloadElement.TryGetProperty("text", out var textElement))
+                    {
+                        var value = textElement.GetString();
+                        if (!string.IsNullOrWhiteSpace(value))
+                            texts.Add(value);
+                    }
+                }
+
+                return texts;
             }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to parse Qdrant search response.");
+                throw;
+            }
+        }
 
-            _logger.LogInformation("Qdrant SearchAsync completed with {Count} results.", texts.Count);
+        // Internal helper (creates a stable ID for deduplicating chunks)
+        private static Guid CreateDeterministicId(string text)
+        {
+            var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(text));
 
-            return texts;
+            var guidBytes = new byte[16];
+            Array.Copy(hashBytes, guidBytes, 16);
+
+            return new Guid(guidBytes);
         }
     }
 }
