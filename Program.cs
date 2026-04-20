@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using RagBackend.Domain.Models;
 using RagBackend.Infrastructure;
+using RagBackend.Infrastructure.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,9 +18,10 @@ builder.Services.AddSwaggerGen();
 
 // Register app services that controllers will use.
 // AddSingleton = "create one instance and reuse it for the whole app".
-builder.Services.AddSingleton<OpenRouterEmbeddingService>();
-builder.Services.AddSingleton<QdrantService>();
-builder.Services.AddSingleton<OpenRouterChatService>();
+builder.Services.AddSingleton<IOpenRouterEmbeddingService, OpenRouterEmbeddingService>();
+builder.Services.AddSingleton<IQdrantService, QdrantService>();
+builder.Services.AddSingleton<IOpenRouterChatService, OpenRouterChatService>();
+
 
 // Build the app (assemble all the registered services and middleware).
 var app = builder.Build();
@@ -67,3 +69,5 @@ app.MapControllers();
 
 // Start the web server and keep it running.
 app.Run();
+
+public partial class Program { }

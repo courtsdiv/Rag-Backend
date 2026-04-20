@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="../RagBackend.Tests/RagBackend.Tests.csproj" />
+  <Project Path="RagBackend.csproj" />
+</Solution>

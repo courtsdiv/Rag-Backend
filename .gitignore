@@ -1,2 +1,16 @@
 appsettings.json
 appsettings.Development.json
+**/CopilotSnapshots/
+.vs
+bin/
+obj/
+
+.cache
+.cache.json
+.pdb
+.dll
+.exe
+
+.user
+.userosscache
+.suo

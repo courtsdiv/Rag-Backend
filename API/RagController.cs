@@ -2,6 +2,7 @@
 using RagBackend.Domain.Models;
 using RagBackend.Domain.Errors;
 using RagBackend.Infrastructure;
+using RagBackend.Infrastructure.Interfaces;
 using RagBackend.Domain.Utils;
 
 namespace RagBackend.API
@@ -18,13 +19,13 @@ namespace RagBackend.API
     public class RagController : ControllerBase
     {
         // Service that turns text into embedding vectors.
-        private readonly OpenRouterEmbeddingService _embeddingService;
+        private readonly IOpenRouterEmbeddingService _embeddingService;
 
         // Service that stores and finds vectors (Qdrant client).
-        private readonly QdrantService _qdrantService;
+        private readonly IQdrantService _qdrantService;
 
         // Service that calls a chat model to produce answers.
-        private readonly OpenRouterChatService _chatService;
+        private readonly IOpenRouterChatService _chatService;
 
         // The size of embeddings produced by the embedding model.
         private const int EmbeddingSize = 1536;
@@ -34,9 +35,9 @@ namespace RagBackend.API
         private readonly ILogger<RagController> _logger;
 
         public RagController(
-            OpenRouterEmbeddingService embeddingService,
-            QdrantService qdrantService,
-            OpenRouterChatService chatService,
+            IOpenRouterEmbeddingService embeddingService,
+            IQdrantService qdrantService,
+            IOpenRouterChatService chatService,
             IConfiguration config,
             ILogger<RagController> logger)
         {
@@ -192,6 +193,7 @@ namespace RagBackend.API
         [HttpPost("answer")]
         public async Task<IActionResult> GetAnswer([FromBody] string question)
         {
+
             if (string.IsNullOrWhiteSpace(question))
             {
                 return BadRequest(new ApiError
