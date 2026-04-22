@@ -1,68 +1,103 @@
 using RagBackend.Application.Interfaces;
 using RagBackend.Application.Services;
-using RagBackend.Domain.Models;
 using RagBackend.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// MVC + Swagger
+/// <summary>
+/// Application entry point.
+/// 
+/// This file is responsible for:
+/// - registering services with dependency injection
+/// - configuring middleware
+/// - starting the HTTP API
+/// </summary>
+
+
+// ----------------------------
+// MVC + API tooling
+// ----------------------------
+
+// Enable controller-based APIs
 builder.Services.AddControllers();
+
+// Enable API metadata (used by Swagger)
 builder.Services.AddEndpointsApiExplorer();
+
+// Enable Swagger for API documentation and testing
 builder.Services.AddSwaggerGen();
 
-// Application layer
+
+// ----------------------------
+// Application layer services
+// ----------------------------
+
+// Core RAG workflow service
 builder.Services.AddScoped<RagService>();
 
-// Infrastructure layer
-builder.Services.AddScoped<IQdrantService, QdrantService>();
+// Chat orchestration and guardrails
+builder.Services.AddScoped<ChatService>();
 
-builder.Services.AddHttpClient<IEmbeddingService, OpenRouterEmbeddingService>(client =>
+
+// ----------------------------
+// Infrastructure layer services
+// ----------------------------
+
+// Vector store implementation
+builder.Services.AddScoped<IVectorStore, VectorStoreService>();
+
+// Embedding service (calls OpenRouter)
+builder.Services.AddHttpClient<IEmbeddingService, LlmEmbeddingService>(client =>
 {
     client.BaseAddress = new Uri("https://openrouter.ai/api/v1/");
 });
 
-builder.Services.AddHttpClient<IChatCompletionService, OpenRouterChatService>(client =>
+// Chat completion service (calls OpenRouter)
+builder.Services.AddHttpClient<IChatCompletionService, LlmService>(client =>
 {
     client.BaseAddress = new Uri("https://openrouter.ai/api/v1/");
 });
+
+
+// ----------------------------
+// Build the application
+// ----------------------------
 
 var app = builder.Build();
 
-// Development tools 
+
+// ----------------------------
+// Development-only tools
+// ----------------------------
+
 if (app.Environment.IsDevelopment())
 {
+    // Enable Swagger UI when running locally
     app.UseSwagger();
     app.UseSwaggerUI();
 }
+
+
+// ----------------------------
 // Middleware pipeline
-app.UseHttpsRedirection();
+// ----------------------------
 
-// Global exception handling
-app.Use(async (context, next) =>
+// Only enforce HTTPS outside development.
+// This avoids issues with local proxies (e.g. Vite).
+if (!app.Environment.IsDevelopment())
 {
-    try
-    {
-        await next();
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine("[FATAL] Unhandled exception: " + ex);
+    app.UseHttpsRedirection();
+}
 
-        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
-        context.Response.ContentType = "application/json";
-
-        await context.Response.WriteAsJsonAsync(new ApiError
-        {
-            Message = "An unexpected server error occurred.",
-            ErrorCode = "UNHANDLED_EXCEPTION"
-        });
-    }
-});
-
+// Enable authorization middleware
 app.UseAuthorization();
 
+// Map controller routes (e.g. /api/Rag/chat)
 app.MapControllers();
+
+// Start the application
 app.Run();
+
 
 // Required for integration testing
 public partial class Program { }

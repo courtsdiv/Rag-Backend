@@ -6,138 +6,140 @@ using RagBackend.Domain.Models;
 namespace RagBackend.API
 {
     /// <summary>
-    /// API controller responsible for handling HTTP requests related to the RAG pipeline.
+    /// This controller acts as the entry point for HTTP requests related to the RAG system.
     /// 
-    /// This controller is intentionally thin:
-    /// - It validates HTTP input
-    /// - Calls RagService to perform business logic
+    /// Its job is NOT to contain business logic.
+    /// Instead, it:
+    /// - Receives requests from the frontend
+    /// - Validates basic input
+    /// - Calls the appropriate application service
     /// - Converts results or errors into HTTP responses
-    /// 
-    /// It does NOT contain RAG logic, LLM logic, or database logic.
     /// </summary>
     [ApiController]
     [Route("api/[controller]")]
-    public class RagController : ControllerBase
+    public sealed class RagController : ControllerBase
     {
-
-        /// Application service that runs the RAG workflow (index, search, answer).
+        /// <summary>
+        /// Service responsible for indexing documents and performing retrieval + generation.
+        /// </summary>
         private readonly RagService _ragService;
 
-       
-        /// Logger for recording errors or unexpected behaviour at the API level.
+        /// <summary>
+        /// Service responsible for chat-specific behaviour
+        /// (intent checking, fallbacks, calling the RAG pipeline).
+        /// </summary>
+        private readonly ChatService _chatService;
+
+        /// <summary>
+        /// Logger used to record useful information and errors for debugging.
+        /// </summary>
         private readonly ILogger<RagController> _logger;
 
-        
-        /// Number of results to retrieve from the vector database.
+        /// <summary>
+        /// Number of document chunks to retrieve from the vector store for each question.
+        /// This value is read from configuration.
+        /// </summary>
         private readonly int _topK;
 
-      
+        /// <summary>
         /// Constructor.
-        /// All dependencies are injected via dependency injection (DI).
+        /// 
+        /// All dependencies are provided via dependency injection.
+        /// This makes the controller easier to test and keeps it loosely coupled.
+        /// </summary>
         public RagController(
             RagService ragService,
+            ChatService chatService,
             IConfiguration config,
             ILogger<RagController> logger)
         {
             _ragService = ragService;
+            _chatService = chatService;
             _logger = logger;
 
-            // Read TopK from configuration, defaulting to 3 if not set.
+            // Read the number of chunks to retrieve (TopK) from configuration.
+            // If the value is not present, default to 3.
             _topK = config.GetValue<int>("Retrieval:TopK", 3);
         }
 
-        /// Indexes raw text so it can be retrieved later via semantic search.
-        /// This endpoint is typically used after uploading a document.
+        /// <summary>
+        /// Index endpoint.
+        /// 
+        /// This endpoint accepts raw text from the frontend and stores it
+        /// in the vector database so it can be searched later.
+        /// </summary>
         [HttpPost("index")]
         public async Task<IActionResult> IndexText([FromBody] string text)
         {
-            // Basic input validation at the API boundary
+            // Basic validation: empty text should not be indexed
             if (string.IsNullOrWhiteSpace(text))
             {
                 return BadRequest(new ApiError
                 {
-                    Message = "Text cannot be empty.",
+                    Message = "Text cannot be empty",
                     ErrorCode = "INVALID_INPUT"
                 });
             }
 
             try
             {
+                // Pass the text to the application service for indexing
                 await _ragService.IndexTextAsync(text);
 
-                return Ok(new
-                {
-                    message = "Text indexed successfully."
-                });
+                // Return a simple success message
+                return Ok(new { message = "Text indexed successfully" });
             }
-            catch (Exception ex)
+            catch (VectorStoreUnavailableException)
             {
-                // If indexing fails, this is most likely due to the vector database
-                _logger.LogError(ex, "Failed to index text.");
-                return ErrorResults.QdrantUnavailable();
+                // If the vector store is unavailable, return a consistent error response
+                return ErrorResults.VectorStoreUnavailable();
             }
         }
 
-        /// Searches the vector database for the most relevant text chunks for a query.
-        [HttpPost("search")]
-        public async Task<IActionResult> Search([FromBody] string query)
+        /// <summary>
+        /// Chat endpoint (Phase 2).
+        /// 
+        /// This is the main endpoint used by the chat UI.
+        /// It receives a user message and returns:
+        /// - an answer
+        /// - retrieved context
+        /// - or a clarification / fallback response
+        /// </summary>
+        [HttpPost("chat")]
+        public async Task<IActionResult> Chat([FromBody] ChatMessageRequest request)
         {
-            if (string.IsNullOrWhiteSpace(query))
+            // Log that the chat endpoint has been hit (useful during debugging)
+            _logger.LogInformation("HTTP POST /api/Rag/chat");
+
+            // Validate the incoming message
+            if (string.IsNullOrWhiteSpace(request?.Message))
             {
                 return BadRequest(new ApiError
                 {
-                    Message = "Query cannot be empty.",
+                    Message = "Message cannot be empty.",
                     ErrorCode = "INVALID_INPUT"
                 });
             }
 
             try
             {
-                var results = await _ragService.SearchAsync(query, _topK);
-                return Ok(results);
+                // Delegate chat processing to the ChatService
+                var response =
+                    await _chatService.ProcessMessageAsync(request.Message, _topK);
+
+                // Return the structured chat response
+                return Ok(response);
+            }
+            catch (VectorStoreUnavailableException ex)
+            {
+                // Log the error and return a vector-store-specific failure response
+                _logger.LogError(ex, "Vector store unavailable during chat.");
+                return ErrorResults.VectorStoreUnavailable();
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to search indexed content.");
-                return ErrorResults.QdrantUnavailable();
-            }
-        }
-
-        /// Generates a grounded answer to a user question using retrieved context only.
-        /// This is the main RAG endpoint used by the frontend chat interface.
-        [HttpPost("answer")]
-        public async Task<IActionResult> GetAnswer([FromBody] string question)
-        {
-            if (string.IsNullOrWhiteSpace(question))
-            {
-                return BadRequest(new ApiError
-                {
-                    Message = "Question cannot be empty.",
-                    ErrorCode = "INVALID_INPUT"
-                });
-            }
-
-            try
-            {
-                var (answer, context) =
-                    await _ragService.GetAnswerAsync(question, _topK);
-
-                return Ok(new
-                {
-                    question,
-                    context,
-                    answer
-                });
-            }
-            catch (QdrantConfigException)
-            {
-                // Configuration or availability issue with the vector database
-                return ErrorResults.QdrantUnavailable();
-            }
-            catch (Exception ex)
-            {
-                // Any remaining errors are assumed to come from the LLM provider
-                _logger.LogError(ex, "Failed to generate answer.");
+                // Any remaining errors are treated as LLM-related failures
+                _logger.LogError(ex, "LLM unavailable during chat.");
                 return ErrorResults.LlmUnavailable();
             }
         }
