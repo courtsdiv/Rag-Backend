@@ -1,150 +1,196 @@
-﻿using RagBackend.Application.Interfaces;
+﻿
+using RagBackend.Application.Interfaces;
 using RagBackend.Domain.Utils;
 
 namespace RagBackend.Application.Services
 {
     /// <summary>
-    /// Application service that runs the main RAG workflow.
+    /// This service contains the core Retrieval‑Augmented Generation (RAG) workflow.
     /// 
-    /// RAG = Retrieve relevant text (from Qdrant) + Generate an answer (from the LLM).
-    /// This class keeps the "business flow" in one place, and hides provider details behind interfaces.
+    /// Its responsibility is to:
+    /// - Index documents into the vector store
+    /// - Search for relevant document chunks
+    /// - Build a grounded prompt using retrieved context
+    /// - Ask the LLM to generate an answer based only on that context
+    /// 
+    /// This class does not handle HTTP requests or UI behaviour.
+    /// It represents the main "business logic" of the RAG system.
     /// </summary>
     public class RagService
     {
-        /// The number of values in each embedding vector.
-        /// This must match the embedding model you are using (e.g., OpenRouter embedding model).
+        /// <summary>
+        /// The expected size of each embedding vector.
+        /// 
+        /// This value must match the embedding model used by the LLM provider.
+        /// If this value is wrong, the vector store will reject stored vectors.
+        /// </summary>
         private const int EmbeddingSize = 1536;
 
-        // ---- Dependencies (injected through the constructor) ----
-
-        /// Service used to turn text into a numeric vector (embedding) for semantic search.
+        /// <summary>
+        /// Service used to convert text into numeric embedding vectors.
+        /// These vectors are used for semantic search.
+        /// </summary>
         private readonly IEmbeddingService _embeddingService;
 
-        /// Service used to store and search embeddings in the vector database (Qdrant).
-        private readonly IQdrantService _qdrantService;
+        /// <summary>
+        /// Service used to store and search vectors in the vector database.
+        /// </summary>
+        private readonly IVectorStore _vectorStore;
 
-        /// Service used to send a prompt to the LLM and get an answer back.
+        /// <summary>
+        /// Service used to send prompts to the LLM and receive generated answers.
+        /// </summary>
         private readonly IChatCompletionService _chatService;
 
-        /// Logger used to record warnings/errors without crashing the application.
+        /// <summary>
+        /// Logger used to record warnings and errors without stopping execution.
+        /// </summary>
         private readonly ILogger<RagService> _logger;
 
-        /// Constructor: all dependencies are passed in using dependency injection (DI).
-        /// This makes the class easier to test and allows providers to be swapped later.
+        /// <summary>
+        /// Constructor.
+        /// 
+        /// All dependencies are injected using dependency injection.
+        /// This keeps the service loosely coupled and easy to test.
+        /// </summary>
         public RagService(
             IEmbeddingService embeddingService,
-            IQdrantService qdrantService,
+            IVectorStore vectorStore,
             IChatCompletionService chatService,
             ILogger<RagService> logger)
         {
             _embeddingService = embeddingService;
-            _qdrantService = qdrantService;
+            _vectorStore = vectorStore;
             _chatService = chatService;
             _logger = logger;
         }
 
         /// <summary>
-        /// Takes raw text, cleans it, splits it into chunks, embeds each chunk,
-        /// and stores the chunk + vector in Qdrant so it can be searched later.
+        /// Indexes raw text so it can be retrieved later using semantic search.
+        /// 
+        /// This method:
+        /// 1. Cleans the input text
+        /// 2. Splits it into smaller chunks
+        /// 3. Converts each chunk into an embedding vector
+        /// 4. Stores the vector and text in the vector store
         /// </summary>
         public async Task IndexTextAsync(string text)
         {
-            // Basic guard: no point doing work if the input is empty.
+            // Do nothing if the input text is empty
             if (string.IsNullOrWhiteSpace(text))
                 return;
 
-            // Clean the text (remove weird whitespace, fix formatting etc.)
-            var cleaned = TextCleaner.Clean(text);
+            // Clean the text (remove formatting issues, extra whitespace, etc.)
+            var cleanedText = TextCleaner.Clean(text);
 
-            // Split into smaller pieces so retrieval works better.
-            var chunks = TextChunker.ChunkText(cleaned);
+            // Split the text into smaller chunks for better retrieval quality
+            var chunks = TextChunker.ChunkText(cleanedText);
 
-            // Ensure the collection exists before we store vectors.
-            // We pass EmbeddingSize so the collection matches the embedding model dimension.
-            await _qdrantService.EnsureCollectionAsync(EmbeddingSize);
+            // Ensure the vector collection exists before inserting data
+            await _vectorStore.EnsureCollectionAsync(EmbeddingSize);
 
             foreach (var chunk in chunks)
             {
-                // Skip empty chunks (extra safety)
+                // Skip empty chunks as a safety check
                 if (string.IsNullOrWhiteSpace(chunk))
                     continue;
 
                 try
                 {
-                    // Turn this chunk into an embedding vector
-                    var vector = await _embeddingService.GetEmbeddingAsync(chunk);
+                    // Convert the text chunk into an embedding vector
+                    var embedding = await _embeddingService.GetEmbeddingAsync(chunk);
 
-                    // Store the vector + original text chunk in Qdrant
-                    await _qdrantService.UpsertAsync(vector, chunk);
+                    // Store the embedding and original text in the vector store
+                    await _vectorStore.UpsertAsync(embedding, chunk);
                 }
                 catch (Exception ex)
                 {
-                    // If one chunk fails, we log it and continue.
-                    // This prevents one bad chunk from stopping the whole indexing job.
+                    // Log the error and continue indexing the remaining chunks
+                    // This prevents one bad chunk from stopping the entire indexing process
                     _logger.LogWarning(ex, "Failed to index a text chunk. Skipping.");
                 }
             }
         }
 
         /// <summary>
-        /// Converts a user query into an embedding vector and searches Qdrant for the most similar chunks.
-        /// Returns the topK most relevant text chunks.
+        /// Searches the vector store for text chunks that are semantically
+        /// similar to the user's query.
         /// </summary>
         public async Task<List<string>> SearchAsync(string query, int topK)
         {
+            // If the query is empty, return no results
             if (string.IsNullOrWhiteSpace(query))
                 return new List<string>();
 
-            // Ensure the collection exists before searching
-            await _qdrantService.EnsureCollectionAsync(EmbeddingSize);
+            // Ensure the vector collection exists before searching
+            await _vectorStore.EnsureCollectionAsync(EmbeddingSize);
 
-            // Turn the query into a vector
-            var queryVector = await _embeddingService.GetEmbeddingAsync(query);
+            // Convert the query into an embedding vector
+            var queryEmbedding = await _embeddingService.GetEmbeddingAsync(query);
 
-            // Find the most similar chunks in Qdrant
-            var results = await _qdrantService.SearchAsync(queryVector, limit: topK);
+            // Retrieve the most similar chunks from the vector store
+            var results =
+                await _vectorStore.SearchAsync(queryEmbedding, limit: topK);
 
             return results;
         }
 
         /// <summary>
-        /// Main "ask a question" method:
-        /// 1) Embed the question
-        /// 2) Retrieve topK relevant chunks from Qdrant
-        /// 3) Build a grounded prompt using only that context
-        /// 4) Send prompt to LLM and return the answer + context
+        /// Main method used to answer a user question.
+        /// 
+        /// This method:
+        /// 1. Embeds the user's question
+        /// 2. Retrieves relevant context from the vector store
+        /// 3. Builds a grounded prompt using that context
+        /// 4. Sends the prompt to the LLM
+        /// 5. Returns the answer and the context used
         /// </summary>
-        public async Task<(string Answer, List<string> Context)> GetAnswerAsync(string question, int topK)
+        public async Task<(string Answer, List<string> Context)> GetAnswerAsync(
+            string question,
+            int topK)
         {
+            // Do not attempt to answer empty questions
             if (string.IsNullOrWhiteSpace(question))
                 return (string.Empty, new List<string>());
 
             // Ensure the vector collection exists
-            await _qdrantService.EnsureCollectionAsync(EmbeddingSize);
+            await _vectorStore.EnsureCollectionAsync(EmbeddingSize);
 
-            // Embed the user question
-            var queryEmbedding = await _embeddingService.GetEmbeddingAsync(question);
+            // Convert the question into an embedding vector
+            var questionEmbedding =
+                await _embeddingService.GetEmbeddingAsync(question);
 
-            // Retrieve relevant chunks (context) from Qdrant
-            var topChunks = await _qdrantService.SearchAsync(queryEmbedding, limit: topK);
+            // Retrieve relevant document chunks as context
+            var contextChunks =
+                await _vectorStore.SearchAsync(questionEmbedding, limit: topK);
 
-            // Build a prompt that forces the model to answer ONLY using the retrieved context
-            var prompt = BuildPrompt(question, topChunks);
+            // Build a prompt that restricts the LLM to the retrieved context only
+            var prompt =
+                BuildPrompt(question, contextChunks);
 
-            // Ask the model for an answer
-            var answer = await _chatService.GetAnswerAsync(prompt);
-             
-            return (answer, topChunks);
+            // Ask the LLM to generate an answer
+            var answer =
+                await _chatService.GetAnswerAsync(prompt);
+
+            return (answer, contextChunks);
         }
-  
-        /// Creates the LLM prompt.
-        /// The key idea is to include context + strict instructions so the model stays grounded.
-        private static string BuildPrompt(string question, List<string> contextChunks)
-        {
-            // Combine all chunks into one context block
-            var context = string.Join("\n\n", contextChunks).Trim();
 
-            // Prompt format: context, question, and rules for the model.
+        /// <summary>
+        /// Builds the prompt sent to the LLM.
+        /// 
+        /// The prompt explicitly:
+        /// - Provides retrieved context
+        /// - Includes the user's question
+        /// - Instructs the model to avoid guessing
+        /// </summary>
+        private static string BuildPrompt(
+            string question,
+            List<string> contextChunks)
+        {
+            // Combine all retrieved chunks into a single context block
+            var context =
+                string.Join("\n\n", contextChunks).Trim();
+
             return $@"
             ## CONTEXT
             ---------------------

@@ -2,31 +2,68 @@
 
 namespace RagBackend.Domain.Utils
 {
-    // Utility for cleaning and normalising raw text before chunking and retrieval
+    /// <summary>
+    /// Utility class responsible for cleaning and normalising raw text
+    /// before it is split into chunks and stored in the vector store.
+    /// 
+    /// Text cleaning is important because documents often contain:
+    /// - inconsistent line breaks
+    /// - formatting artefacts
+    /// - broken sentences or words
+    /// 
+    /// Cleaning the text helps improve embedding quality
+    /// and retrieval accuracy.
+    /// </summary>
     public static class TextCleaner
     {
-        // Normalises input text by fixing line breaks, spacing, and formatting issues
+        /// <summary>
+        /// Cleans and normalises raw text by fixing common formatting issues.
+        /// 
+        /// This method:
+        /// - normalises line endings
+        /// - joins sentences split across lines
+        /// - fixes words broken by line breaks
+        /// - removes extra whitespace
+        /// </summary>
+        /// <param name="text">
+        /// The raw text to clean.
+        /// </param>
+        /// <returns>
+        /// A cleaned version of the text, ready for chunking and embedding.
+        /// </returns>
         public static string Clean(string text)
         {
-            // Guard: return empty string if input text is empty
+            // If the input text is empty, return an empty string
             if (string.IsNullOrWhiteSpace(text))
                 return string.Empty;
 
-            // Normalise line endings
+            // Normalise Windows-style line endings to Unix-style
+            // This makes further processing more predictable
             text = text.Replace("\r\n", "\n");
 
-            // Join headings or sentences split across lines
-            text = Regex.Replace(text, "([a-zA-Z])\\s*\\n\\s*([A-Z])", "$1. $2");
+            // Join sentences or headings that were split across lines.
+            // Example:
+            // "This is a sentence\nThat continues" → "This is a sentence. That continues"
+            text = Regex.Replace(
+                text,
+                "([a-zA-Z])\\s*\\n\\s*([A-Z])",
+                "$1. $2");
 
-            // Join words split mid-word across line breaks
-            text = Regex.Replace(text, "([a-zA-Z])\\s*\\n\\s*([a-z])", "$1$2");
+            // Join words that were broken across line breaks.
+            // Example:
+            // "infor\nmation" → "information"
+            text = Regex.Replace(
+                text,
+                "([a-zA-Z])\\s*\\n\\s*([a-z])",
+                "$1$2");
 
-            // Replace remaining line breaks with spaces
+            // Replace any remaining line breaks with a single space
             text = Regex.Replace(text, "\\n+", " ");
 
             // Collapse multiple spaces into a single space
             text = Regex.Replace(text, "\\s{2,}", " ");
 
+            // Remove leading and trailing whitespace
             return text.Trim();
         }
     }
